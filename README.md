@@ -1,23 +1,33 @@
 # aeroport-guest-agent
 
-This repository contains the guest runtime components that execute inside the headless Windows 11 ARM64 virtual machine, consisting of the User-Mode Driver (`aeroport.dll`) and the background integration management daemon.
+This repository contains the consolidated source code for the AeroPort Windows guest subsystem. Operating entirely in user space via API translation and the User-Mode Driver Framework (UMDF 2.x), this module eliminates kernel-mode panics (BSODs) and isolates runtime execution directly within the targeted application threads.
 
 ---
 
-## Core Components
+## Workspace Architecture
 
-### 1. User-Mode Driver (UMD)
-Functions as an Installable Client Driver (ICD) that hooks directly into user-space application layers:
-* **Shader Extraction:** Intercepts Pipeline State Object (PSO) initialization to isolate raw DXIL shader bytecode tokens before hardware compilation.
-* **Shadow Heap Optimization:** Maintains a local memory shadow block of active application maps. Utilizes vectorized ARM NEON memory evaluations to compare, diff, and submit sparse delta updates rather than processing full frame buffers.
+The repository is organized into a single Visual Studio workspace containing three specialized modules:
 
-### 2. VSOCK Integration Daemon
-A lightweight background service that links user space environment states back to the macOS window server over hypervisor sockets:
-* **Shell Integration:** Monitors the guest Start Menu registry paths, extracts native application shortcuts and application `.png` visual icons, and serializes them to the host.
-* **RAIL Protocol UI Routing:** Passes window boundaries, focal states, and coordinate changes over the local hypervisor socket layers.
+### 1. `aeroport-launch`
+The primary loader executable. It spawns the targeted 3D application process in a suspended state, uses Microsoft Detours to inject the translation library into its runtime footprint, and resumes execution.
+
+### 2. `aeroport-hook`
+The core runtime translation library (`.dll`). It hooks direct entry points inside `dxgi.dll` and `d3d12.dll` to manage the paravirtualized pipeline:
+* **Adapter Spoofing:** Overrides DXGI Factory enumeration to report a high-performance discrete GPU, bypassing the Windows WARP software rasterization fallback.
+* **Pipeline State Capture:** Intercepts full Pipeline State Objects (PSOs), bundling DXIL shader bytecode alongside Root Signatures and descriptor metadata.
+* **VEH Memory Tracking:** Registers a Vectored Exception Handler utilizing `PAGE_GUARD` memory faults to trap and map inline bindless descriptor heap alterations without breaking execution loops.
+* **Vectorized Delta Diffing:** Implements aligned ARM NEON assembly loops to scan and transmit sparse memory subranges (`AEROPORT_TOKEN_WRITE_SUBRANGE`) inside upload heaps right at command execution boundaries.
+
+### 3. `aeroport-idd-driver`
+A User-Mode Indirect Display Driver. It enumerates the virtual monitor interface, targets desktop swapchains, and maps guest timeline fences to host synchronization primitives via an asynchronous thread pool to prevent multi-threaded application deadlocks.
 
 ---
 
-## Development and Testing
+## Compilation and Toolchain
 
-The agent architecture can be compiled using modern C++ toolchains on Windows. For sandbox verification, communication structures can be tested locally using internal TCP loopback sockets (`127.0.0.1`) before switching to native `AF_HYPERV` / `VMADDR_CID_HOST` socket types on actual Apple Silicon hypervisor setups.
+This workspace compiles exclusively on Windows platforms targeting the ARM64 architecture:
+* **Toolchain:** Visual Studio containing the "Desktop development with C++" workload.
+* **SDK / WDK:** The matching generation Windows SDK and Windows Driver Kit (WDK) with UMDF 2.x configurations enabled.
+* **Dependencies:** Microsoft Detours.
+
+*Note: The guest operating system must have test-signing enabled (`testsigned on`) via the `aeroport-iso-tool` configurations to successfully load the user-mode display driver components during development.*
